@@ -5,7 +5,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
-DATABASE_URL = f"sqlite+aiosqlite:///{BASE_DIR}/cliptrace.db"
+DATABASE_URL = "mongodb+srv://mfmfahy_db_user:od1a9LtASaRGYqpY@cluster0.wnodqlo.mongodb.net/?appName=Cluster0"
+DATABASE_NAME = "cliptrace"
 
 SEGMENT_DURATION = 1.0          # seconds per segment
 FINGERPRINT_DIM = 832           # 256 deterministic + 576 MobileNetV3 ML embedding

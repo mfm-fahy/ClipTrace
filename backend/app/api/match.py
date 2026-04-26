@@ -1,7 +1,6 @@
 import aiofiles
 import uuid
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.database import get_db
 from app.processing.segmenter import cleanup_audio_files
@@ -15,7 +14,7 @@ router = APIRouter()
 @router.post("/")
 async def match_clip(
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db = Depends(get_db),
 ):
     tmp_path = UPLOAD_DIR / f"query_{uuid.uuid4()}_{file.filename}"
     async with aiofiles.open(tmp_path, "wb") as f:

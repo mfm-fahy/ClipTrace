@@ -8,8 +8,7 @@ librosa
 soundfile
 imagehash
 Pillow
-sqlalchemy
-aiosqlite
+motor
 faiss-cpu
 torch
 torchvision

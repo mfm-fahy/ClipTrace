@@ -2,10 +2,8 @@ import json
 import aiofiles
 import uuid
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from app.db.database import get_db, Segment, Video
+from app.db.database import get_db
 from app.processing.segmenter import cleanup_audio_files
 from app.matching.engine import match_segments
 from app.core.config import UPLOAD_DIR
@@ -17,7 +15,7 @@ router = APIRouter()
 @router.post("/clip")
 async def verify_clip(
     file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
+    db = Depends(get_db),
 ):
     tmp_path = UPLOAD_DIR / f"verify_{uuid.uuid4()}_{file.filename}"
     async with aiofiles.open(tmp_path, "wb") as f:
@@ -56,25 +54,23 @@ async def verify_clip(
 
 
 @router.get("/chain/{video_id}")
-async def verify_video_chain(video_id: str, db: AsyncSession = Depends(get_db)):
-    video = await db.get(Video, video_id)
+async def verify_video_chain(video_id: str, db = Depends(get_db)):
+    video = await db["videos"].find_one({"id": video_id})
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
 
-    result = await db.execute(
-        select(Segment).where(Segment.video_id == video_id).order_by(Segment.segment_index)
-    )
-    segs = result.scalars().all()
+    cursor = db["segments"].find({"video_id": video_id}).sort("segment_index", 1)
+    segs = await cursor.to_list(length=None)
     if not segs:
         raise HTTPException(status_code=404, detail="No segments found for this video")
 
-    hashes = [s.chain_hash for s in segs if s.chain_hash]
+    hashes = [s.get("chain_hash") for s in segs if s.get("chain_hash")]
     is_continuous = len(hashes) == len(segs) and len(set(hashes)) == len(hashes)
 
     return {
         "video_id": video_id,
-        "title": video.title,
-        "chain_root_hash": video.chain_root_hash,
+        "title": video["title"],
+        "chain_root_hash": video.get("chain_root_hash"),
         "total_segments": len(segs),
         "chain_intact": is_continuous,
         "status": "verified" if is_continuous else "tampered",

@@ -7,17 +7,14 @@ and returns ranked source matches with confidence scores.
 import numpy as np
 import json
 from collections import defaultdict
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from app.db.database import Segment, Video
 from app.matching.vector_index import get_index
 from app.core.config import SIMILARITY_THRESHOLD, MIN_MATCHING_SEGMENTS, CONFIDENCE_CONTINUITY_BONUS
 
 
 async def match_segments(
     query_embeddings: list[np.ndarray],
-    db: AsyncSession,
+    db,
     top_k: int = 10,
 ) -> list[dict]:
     """
@@ -29,7 +26,7 @@ async def match_segments(
         return []
 
     # video_id → list of (query_seg_idx, db_seg_id, score)
-    video_hits: dict[str, list[tuple[int, int, float]]] = defaultdict(list)
+    video_hits: dict[str, list[tuple[int, str, float]]] = defaultdict(list)
 
     for q_idx, emb in enumerate(query_embeddings):
         results = index.search(emb, top_k=top_k)
@@ -43,14 +40,14 @@ async def match_segments(
     # Fetch segment metadata for all matched segment IDs
     all_seg_ids = [sid for hits in video_hits.values() for _, sid, _ in hits]
     seg_rows = await _fetch_segments(all_seg_ids, db)
-    seg_map = {row.id: row for row in seg_rows}
+    seg_map = {row["id"]: row for row in seg_rows}
 
     matches = []
     for video_id, hits in video_hits.items():
         if len(hits) < MIN_MATCHING_SEGMENTS:
             continue
 
-        video_row = await db.get(Video, video_id)
+        video_row = await db["videos"].find_one({"id": video_id})
         if not video_row:
             continue
 
@@ -58,8 +55,8 @@ async def match_segments(
 
         matches.append({
             "video_id": video_id,
-            "title": video_row.title,
-            "owner": video_row.owner,
+            "title": video_row["title"],
+            "owner": video_row["owner"],
             "confidence": round(confidence, 4),
             "matched_segments": len(hits),
             "matched_timestamps": matched_timestamps,
@@ -74,16 +71,16 @@ async def match_segments(
     return matches[:5]  # return top 5 sources
 
 
-def _video_id_for_segment(seg_id: int) -> str:
+def _video_id_for_segment(seg_id: str) -> str:
     """Lookup video_id from the in-memory segment→video map (populated at index build time)."""
     return _seg_to_video.get(seg_id, "unknown")
 
 
 # Populated when index is rebuilt
-_seg_to_video: dict[int, str] = {}
+_seg_to_video: dict[str, str] = {}
 
 
-def register_segment_video(seg_id: int, video_id: str):
+def register_segment_video(seg_id: str, video_id: str):
     _seg_to_video[seg_id] = video_id
 
 
@@ -91,16 +88,16 @@ def clear_segment_video_map():
     _seg_to_video.clear()
 
 
-async def _fetch_segments(seg_ids: list[int], db: AsyncSession) -> list[Segment]:
+async def _fetch_segments(seg_ids: list[str], db) -> list[dict]:
     if not seg_ids:
         return []
-    result = await db.execute(select(Segment).where(Segment.id.in_(seg_ids)))
-    return result.scalars().all()
+    cursor = db["segments"].find({"id": {"$in": seg_ids}})
+    return await cursor.to_list(length=None)
 
 
 def _compute_confidence(
-    hits: list[tuple[int, int, float]],
-    seg_map: dict[int, Segment],
+    hits: list[tuple[int, str, float]],
+    seg_map: dict[str, dict],
     total_query_segs: int,
 ) -> tuple[float, list[dict]]:
     """
@@ -124,8 +121,8 @@ def _compute_confidence(
         if seg:
             matched_timestamps.append({
                 "query_time": q_idx,
-                "source_start": seg.timestamp_start,
-                "source_end": seg.timestamp_end,
+                "source_start": seg["timestamp_start"],
+                "source_end": seg["timestamp_end"],
                 "score": round(float(score), 4),
             })
 
@@ -134,7 +131,7 @@ def _compute_confidence(
 
 def _flag_mixed_content(
     matches: list[dict],
-    video_hits: dict[str, list[tuple[int, int, float]]],
+    video_hits: dict[str, list[tuple[int, str, float]]],
     total_query_segs: int,
 ) -> list[dict]:
     """Mark results as mixed-content when multiple sources cover distinct query segments."""

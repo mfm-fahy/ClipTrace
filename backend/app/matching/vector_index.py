@@ -19,7 +19,7 @@ from app.core.config import FINGERPRINT_DIM
 class VectorIndex:
     def __init__(self, dim: int = FINGERPRINT_DIM):
         self.dim = dim
-        self._segment_ids: list[int] = []
+        self._segment_ids: list[str] = []
         self._index = None
         self._vectors: list[np.ndarray] = []
 
@@ -30,7 +30,7 @@ class VectorIndex:
             if FAISS_OK:
                 self._index = faiss.IndexFlatIP(dim)
 
-    def add(self, segment_id: int, embedding: np.ndarray):
+    def add(self, segment_id: str, embedding: np.ndarray):
         vec = embedding.astype(np.float32).reshape(1, -1)
         self._ensure_index(vec.shape[1])
         self._segment_ids.append(segment_id)
@@ -39,7 +39,7 @@ class VectorIndex:
         else:
             self._vectors.append(vec[0])
 
-    def search(self, query: np.ndarray, top_k: int = 20) -> list[tuple[int, float]]:
+    def search(self, query: np.ndarray, top_k: int = 20) -> list[tuple[str, float]]:
         """Returns list of (segment_id, similarity_score) sorted descending."""
         if not self._segment_ids:
             return []
@@ -60,7 +60,7 @@ class VectorIndex:
             top = np.argsort(sims)[::-1][:top_k]
             return [(self._segment_ids[int(i)], float(sims[i])) for i in top]
 
-    def rebuild(self, entries: list[tuple[int, np.ndarray]]):
+    def rebuild(self, entries: list[tuple[str, np.ndarray]]):
         """Rebuild index from (segment_id, embedding) pairs."""
         self._segment_ids = []
         self._index = None

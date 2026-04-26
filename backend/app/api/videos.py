@@ -4,10 +4,8 @@ import json
 import aiofiles
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
 
-from app.db.database import get_db, Video, Segment, MonetizationRule
+from app.db.database import get_db
 from app.processing.segmenter import cleanup_audio_files
 from app.core.chain import build_chain
 from app.matching.vector_index import get_index
@@ -25,7 +23,7 @@ async def register_video(
     file: UploadFile = File(...),
     title: str = Form(...),
     owner: str = Form(...),
-    db: AsyncSession = Depends(get_db),
+    db = Depends(get_db),
 ):
     video_id = str(uuid.uuid4())
     save_path = UPLOAD_DIR / f"{video_id}_{file.filename}"
@@ -48,35 +46,44 @@ async def register_video(
     chain = build_chain(video_id, fingerprints_hex)
     chain_root = chain[-1]["chain_hash"] if chain else ""
 
-    video_row = Video(
-        id=video_id,
-        title=title,
-        owner=owner,
-        duration=segments[-1]["timestamp_end"],
-        registered_at=time.time(),
-        chain_root_hash=chain_root,
-    )
-    db.add(video_row)
-    await db.flush()
+    video_dict = {
+        "id": video_id,
+        "title": title,
+        "owner": owner,
+        "duration": segments[-1]["timestamp_end"],
+        "registered_at": time.time(),
+        "chain_root_hash": chain_root,
+    }
+    await db["videos"].insert_one(video_dict)
 
     index = get_index()
+    segment_dicts = []
     for i, (seg, emb, fp_hex) in enumerate(zip(segments, embeddings, fingerprints_hex)):
-        seg_row = Segment(
-            video_id=video_id,
-            segment_index=seg["index"],
-            timestamp_start=seg["timestamp_start"],
-            timestamp_end=seg["timestamp_end"],
-            fingerprint_hex=fp_hex,
-            embedding_blob=json.dumps(emb.tolist()),
-            chain_hash=chain[i]["chain_hash"] if i < len(chain) else None,
-        )
-        db.add(seg_row)
-        await db.flush()
-        index.add(seg_row.id, emb)
-        register_segment_video(seg_row.id, video_id)
+        seg_id = str(uuid.uuid4())
+        seg_dict = {
+            "id": seg_id,
+            "video_id": video_id,
+            "segment_index": seg["index"],
+            "timestamp_start": seg["timestamp_start"],
+            "timestamp_end": seg["timestamp_end"],
+            "fingerprint_hex": fp_hex,
+            "embedding_blob": json.dumps(emb.tolist()),
+            "chain_hash": chain[i]["chain_hash"] if i < len(chain) else None,
+        }
+        segment_dicts.append(seg_dict)
+        index.add(seg_id, emb)
+        register_segment_video(seg_id, video_id)
 
-    db.add(MonetizationRule(video_id=video_id, owner=owner, revenue_share=1.0, action="monetize"))
-    await db.commit()
+    if segment_dicts:
+        await db["segments"].insert_many(segment_dicts)
+
+    rule_dict = {
+        "video_id": video_id,
+        "owner": owner,
+        "revenue_share": 1.0,
+        "action": "monetize"
+    }
+    await db["monetization_rules"].insert_one(rule_dict)
     cleanup_audio_files(segments)
 
     return {
@@ -85,32 +92,35 @@ async def register_video(
         "owner": owner,
         "segments_registered": len(segments),
         "chain_root_hash": chain_root,
-        "duration": video_row.duration,
+        "duration": video_dict["duration"],
     }
 
 
 @router.get("/")
-async def list_videos(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Video))
-    videos = result.scalars().all()
+async def list_videos(db = Depends(get_db)):
+    cursor = db["videos"].find()
+    videos = await cursor.to_list(length=None)
     return [
         {
-            "video_id": v.id,
-            "title": v.title,
-            "owner": v.owner,
-            "duration": v.duration,
-            "registered_at": v.registered_at,
-            "chain_root_hash": v.chain_root_hash,
+            "video_id": v["id"],
+            "title": v["title"],
+            "owner": v["owner"],
+            "duration": v["duration"],
+            "registered_at": v["registered_at"],
+            "chain_root_hash": v.get("chain_root_hash"),
         }
         for v in videos
     ]
 
 
 @router.delete("/{video_id}")
-async def delete_video(video_id: str, db: AsyncSession = Depends(get_db)):
-    video = await db.get(Video, video_id)
+async def delete_video(video_id: str, db = Depends(get_db)):
+    video = await db["videos"].find_one({"id": video_id})
     if not video:
         raise HTTPException(status_code=404, detail="Video not found")
-    await db.delete(video)
-    await db.commit()
+    
+    await db["videos"].delete_one({"id": video_id})
+    await db["segments"].delete_many({"video_id": video_id})
+    await db["monetization_rules"].delete_one({"video_id": video_id})
+    
     return {"deleted": video_id}

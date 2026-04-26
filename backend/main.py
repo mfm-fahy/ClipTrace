@@ -6,7 +6,7 @@ import asyncio
 import concurrent.futures
 import traceback
 
-from app.db.database import init_db
+from app.db.database import init_db, close_db
 from app.api import videos, match, verify, monetization
 
 # Thread pool for CPU-heavy video processing (segmentation + ML inference)
@@ -20,6 +20,7 @@ async def lifespan(app: FastAPI):
     loop.set_default_executor(_executor)
     yield
     _executor.shutdown(wait=False)
+    await close_db()
 
 
 app = FastAPI(
